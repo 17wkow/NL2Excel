@@ -7,25 +7,44 @@
 let lastGeneratedFormula = "";
 
 // Import Gemini SDK
-import { GoogleGenerativeAI } from "@google/generative-ai";
+// import { GoogleGenerativeAI } from "@google/generative-ai";
+
+const PROVIDERS = {
+    gemini: { name: "Gemini", keyStorage: "gemini_api_key" },
+    openai: { name: "OpenAI", keyStorage: "openai_api_key" }
+};
 
 Office.onReady((info) => {
     if (info.host === Office.HostType.Excel) {
         document.getElementById("generate-btn").onclick = generateFormula;
         document.getElementById("insert-btn").onclick = insertFormula;
         document.getElementById("save-key-btn").onclick = saveApiKey;
+        document.getElementById("provider-select").onchange = updateProviderUI;
 
-        // Load saved key if available, or use env var
-        const savedKey = localStorage.getItem("gemini_api_key") || process.env.GEMINI_API_KEY;
-        if (savedKey) {
-            document.getElementById("api-key").value = savedKey;
-        }
+        // Initialize UI
+        updateProviderUI();
     }
 });
+
+function getSelectedProvider() {
+    return document.getElementById("provider-select").value;
+}
+
+function updateProviderUI() {
+    const provider = getSelectedProvider();
+    const config = PROVIDERS[provider];
+
+    document.getElementById("api-key-label").innerText = `${config.name} API Key:`;
+
+    // Load saved key
+    const savedKey = localStorage.getItem(config.keyStorage) || "";
+    document.getElementById("api-key").value = savedKey;
+}
 
 async function generateFormula() {
     const description = document.getElementById("description").value;
     const apiKey = document.getElementById("api-key").value;
+    const provider = getSelectedProvider();
     const messageArea = document.getElementById("message-area");
     const resultSection = document.getElementById("result-section");
     const formulaPreview = document.getElementById("formula-preview");
@@ -35,7 +54,7 @@ async function generateFormula() {
         return;
     }
     if (!apiKey) {
-        messageArea.innerText = "Please enter your Gemini API Key in settings.";
+        messageArea.innerText = `Please enter your ${PROVIDERS[provider].name} API Key in settings.`;
         return;
     }
 
@@ -43,7 +62,7 @@ async function generateFormula() {
     resultSection.classList.add("hidden");
 
     try {
-        const formula = await callLLM(description, apiKey);
+        const formula = await callLLM(description, apiKey, provider);
         lastGeneratedFormula = formula;
         formulaPreview.innerText = formula;
         resultSection.classList.remove("hidden");
@@ -78,29 +97,71 @@ async function insertFormula() {
 }
 
 function saveApiKey() {
+    const provider = getSelectedProvider();
     const key = document.getElementById("api-key").value;
-    localStorage.setItem("gemini_api_key", key);
-    document.getElementById("message-area").innerText = "API Key saved.";
+    localStorage.setItem(PROVIDERS[provider].keyStorage, key);
+
+    document.getElementById("message-area").innerText = `${PROVIDERS[provider].name} Key saved.`;
     setTimeout(() => {
         document.getElementById("message-area").innerText = "";
     }, 2000);
 }
 
-async function callLLM(prompt, apiKey) {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
+async function callLLM(prompt, apiKey, provider) {
     const systemPrompt = "You are an expert Excel assistant. User will ask for a formula. Output ONLY the Excel formula, starting with =. Do not explain. If the request is not clear, guess the most likely standard formula.";
 
-    const result = await model.generateContent([systemPrompt, prompt]);
-    const response = await result.response;
-    let content = response.text().trim();
+    if (provider === "gemini") {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [{ text: `${systemPrompt}\n\n${prompt}` }]
+                }]
+            })
+        });
 
-    // Clean up if it wrapped in markdown code blocks
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error((errorData.error && errorData.error.message) || `Gemini Error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const text = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text) || "";
+        return cleanFormula(text);
+    } else if (provider === "openai") {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: "gpt-4o-mini",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: prompt }
+                ]
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            const msg = (errorData.error && errorData.error.message) || `OpenAI Error: ${response.status}`;
+            throw new Error(msg);
+        }
+
+        const data = await response.json();
+        return cleanFormula(data.choices[0].message.content);
+    }
+}
+
+function cleanFormula(text) {
+    let content = text.trim();
     if (content.startsWith("```")) {
         content = content.replace(/^```(excel)?\s*/, "").replace(/\s*```$/, "");
     }
-
     return content;
 }
 

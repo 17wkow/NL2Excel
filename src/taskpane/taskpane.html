@@ -38,8 +38,15 @@
             <details>
                 <summary>Settings</summary>
                 <div class="setting-item">
-                    <label for="api-key">Gemini API Key:</label>
-                    <input type="password" id="api-key" placeholder="AI..." />
+                    <label for="provider-select">Provider:</label>
+                    <select id="provider-select">
+                        <option value="gemini">Google Gemini</option>
+                        <option value="openai">OpenAI</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <label id="api-key-label" for="api-key">Gemini API Key:</label>
+                    <input type="password" id="api-key" placeholder="Paste API Key..." />
                     <button id="save-key-btn">Save Key</button>
                 </div>
             </details>
